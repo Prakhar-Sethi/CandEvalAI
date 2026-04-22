@@ -1,9 +1,10 @@
 """
-HCL Module 3 — Technical Interview with Facial Expression Analysis
+HCL Module 3 — AI Technical Interview with Facial Expression Analysis
 FastAPI application entry point.
 """
 import sys
-sys.setrecursionlimit(1000000)  # DeepFace + TensorFlow require deep recursion
+sys.setrecursionlimit(1000000)
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -34,17 +35,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=(
-        "Backend API for Module 3 of the HCL AI-Powered Candidate Evaluation Platform. "
-        "Manages WebRTC interview sessions via Daily.co and performs real-time facial "
-        "expression analysis using DeepFace."
+        "Module 3: AI-driven technical interview. "
+        "Claude (Anthropic) acts as the interviewer, asking adaptive technical questions. "
+        "DeepFace analyzes the candidate's facial expressions in real time."
     ),
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
-# CORS — allow the React dev server and production origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -53,7 +53,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
 app.include_router(sessions.router)
 app.include_router(emotion.router)
 app.include_router(report.router)

@@ -1,15 +1,13 @@
 """
-Session lifecycle routes.
+Session lifecycle + AI interview conversation routes.
 
-POST   /sessions                          – create session + LiveKit room
+POST   /sessions                          – create session, AI sends greeting
 GET    /sessions/{session_id}             – fetch session details
-PATCH  /sessions/{session_id}            – update status (active / completed)
-POST   /sessions/{session_id}/token      – issue LiveKit meeting token
-DELETE /sessions/{session_id}            – cancel & cleanup
+POST   /sessions/{session_id}/message     – send candidate message, get AI response
 """
 import logging
 from uuid import UUID
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,117 +17,127 @@ from app.database import get_db
 from app.models import InterviewSession, SessionStatus
 from app.schemas import (
     SessionCreate,
-    SessionUpdate,
     SessionResponse,
-    MeetingTokenRequest,
-    MeetingTokenResponse,
+    SessionStartResponse,
+    MessageRequest,
+    MessageResponse,
 )
-from app.services import livekit_service
+from app.config import get_settings
+from app.services import ai_service
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
-@router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SessionStartResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(payload: SessionCreate, db: AsyncSession = Depends(get_db)):
     """
-    Create a new interview session and provision a LiveKit room.
+    Create a new AI interview session.
+    Claude generates the opening greeting and first question immediately.
     """
     session = InterviewSession(
-        candidate_id=payload.candidate_id,
-        interviewer_id=payload.interviewer_id,
+        candidate_name=payload.candidate_name,
         job_role=payload.job_role,
-        status=SessionStatus.PENDING,
+        status=SessionStatus.ACTIVE,
+        messages=[],
+        question_count=0,
+        started_at=datetime.now(timezone.utc),
     )
     db.add(session)
-    await db.flush()  # get the UUID before calling LiveKit
+    await db.flush()
 
+    # Get AI greeting + first question
     try:
-        room = await livekit_service.create_room(str(session.id))
-        session.livekit_room_name = room["name"]
-        session.livekit_room_url = room["url"]
+        greeting = ai_service.build_greeting(payload.candidate_name, payload.job_role)
     except Exception as exc:
-        logger.error("Failed to create LiveKit room: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not provision video room. Is the LiveKit server running?",
-        )
+        logger.error("AI greeting failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"AI service unavailable: {exc}. Is Ollama running?")
+
+    session.messages = [{"role": "assistant", "content": greeting}]
+    session.question_count = 1
 
     await db.commit()
     await db.refresh(session)
-    return session
+
+    return SessionStartResponse(
+        id=session.id,
+        candidate_name=session.candidate_name,
+        job_role=session.job_role,
+        status=session.status,
+        greeting=greeting,
+        created_at=session.created_at,
+    )
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
-    session = await _get_or_404(session_id, db)
-    return session
+    return await _get_or_404(session_id, db)
 
 
-@router.patch("/{session_id}", response_model=SessionResponse)
-async def update_session(
-    session_id: UUID, payload: SessionUpdate, db: AsyncSession = Depends(get_db)
+@router.post("/{session_id}/message", response_model=MessageResponse)
+async def send_message(
+    session_id: UUID,
+    payload: MessageRequest,
+    db: AsyncSession = Depends(get_db),
 ):
+    """
+    Candidate sends a response; Claude replies with the next question or wrap-up.
+    """
     session = await _get_or_404(session_id, db)
 
-    if payload.status:
-        session.status = payload.status
-        if payload.status == SessionStatus.ACTIVE and session.started_at is None:
-            session.started_at = datetime.now(timezone.utc)
-        elif payload.status == SessionStatus.COMPLETED and session.ended_at is None:
-            session.ended_at = datetime.now(timezone.utc)
+    if session.status == SessionStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Interview is already completed.")
+
+    # Append candidate's message
+    messages = list(session.messages or [])
+    messages.append({"role": "user", "content": payload.content})
+
+    # Get AI response
+    try:
+        ai_text, is_complete = ai_service.get_next_response(
+            candidate_name=session.candidate_name,
+            job_role=session.job_role,
+            messages=messages,
+            question_count=session.question_count,
+            max_questions=settings.max_interview_questions,
+        )
+    except Exception as exc:
+        logger.error("AI response failed: %s", exc)
+        raise HTTPException(status_code=502, detail="AI service error. Please retry.")
+
+    messages.append({"role": "assistant", "content": ai_text})
+
+    # Update session
+    session.messages = messages
+    if not is_complete:
+        session.question_count = session.question_count + 1
+    else:
+        session.status = SessionStatus.COMPLETED
+        session.ended_at = datetime.now(timezone.utc)
+
+        # Generate assessment asynchronously (fire-and-forget via sync call)
+        try:
+            emotion_summary = await _compute_emotion_summary(session_id, db)
+            assessment = ai_service.generate_assessment(
+                candidate_name=session.candidate_name,
+                job_role=session.job_role,
+                messages=messages,
+                emotion_summary=emotion_summary,
+            )
+            session.ai_assessment = assessment
+        except Exception as exc:
+            logger.warning("Assessment generation failed: %s", exc)
 
     await db.commit()
     await db.refresh(session)
-    return session
 
-
-@router.post("/{session_id}/token", response_model=MeetingTokenResponse)
-async def issue_meeting_token(
-    session_id: UUID, payload: MeetingTokenRequest, db: AsyncSession = Depends(get_db)
-):
-    """
-    Issue a signed LiveKit JWT for a participant.
-    Interviewers receive admin tokens; candidates receive standard tokens.
-    """
-    session = await _get_or_404(session_id, db)
-    if session.status == SessionStatus.CANCELLED:
-        raise HTTPException(status_code=400, detail="Session has been cancelled.")
-    if not session.livekit_room_name:
-        raise HTTPException(status_code=400, detail="Room not yet provisioned.")
-
-    is_owner = payload.participant_role == "interviewer"
-    try:
-        token = await livekit_service.create_meeting_token(
-            room_name=session.livekit_room_name,
-            participant_name=payload.participant_name,
-            is_owner=is_owner,
-        )
-    except Exception as exc:
-        logger.error("Failed to create meeting token: %s", exc)
-        raise HTTPException(status_code=502, detail="Could not create meeting token.")
-
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
-    return MeetingTokenResponse(
-        token=token,
-        room_url=session.livekit_room_url,
-        expires_at=expires_at,
+    return MessageResponse(
+        ai_message=ai_text,
+        question_count=session.question_count,
+        is_complete=is_complete,
+        session_status=session.status,
     )
-
-
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def cancel_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
-    session = await _get_or_404(session_id, db)
-    session.status = SessionStatus.CANCELLED
-    session.ended_at = datetime.now(timezone.utc)
-
-    if session.livekit_room_name:
-        try:
-            await livekit_service.delete_room(session.livekit_room_name)
-        except Exception as exc:
-            logger.warning("Could not delete LiveKit room %s: %s", session.livekit_room_name, exc)
-
-    await db.commit()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -142,3 +150,32 @@ async def _get_or_404(session_id: UUID, db: AsyncSession) -> InterviewSession:
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found.")
     return session
+
+
+async def _compute_emotion_summary(session_id: UUID, db: AsyncSession) -> dict:
+    from app.models import EmotionReading
+    from sqlalchemy import func
+
+    result = await db.execute(
+        select(EmotionReading).where(EmotionReading.session_id == session_id)
+    )
+    readings = result.scalars().all()
+
+    if not readings:
+        return {"dominant_label": "neutral", "average_confidence": 0.5,
+                "confident_pct": 0, "stressed_pct": 0}
+
+    counts = {"confident": 0, "neutral": 0, "stressed": 0}
+    total_confidence = 0.0
+    for r in readings:
+        counts[r.interview_label.value] = counts.get(r.interview_label.value, 0) + 1
+        total_confidence += r.confidence_score
+
+    total = len(readings)
+    dominant = max(counts, key=lambda k: counts[k])
+    return {
+        "dominant_label": dominant,
+        "average_confidence": total_confidence / total,
+        "confident_pct": (counts["confident"] / total) * 100,
+        "stressed_pct": (counts["stressed"] / total) * 100,
+    }

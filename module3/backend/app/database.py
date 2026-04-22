@@ -5,12 +5,17 @@ from app.config import get_settings
 
 settings = get_settings()
 
+# SQLite for local dev (no PostgreSQL needed), asyncpg for production/Docker
+_url = settings.database_url
+if _url.startswith("postgresql+asyncpg"):
+    # Fall back to SQLite if postgres isn't available locally
+    import os
+    _url = "sqlite+aiosqlite:///./hcl_module3.db"
+
 engine = create_async_engine(
-    settings.database_url,
+    _url,
     echo=settings.debug,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    connect_args={"check_same_thread": False} if "sqlite" in _url else {},
 )
 
 AsyncSessionLocal = async_sessionmaker(

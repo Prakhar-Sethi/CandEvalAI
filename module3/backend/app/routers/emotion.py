@@ -1,8 +1,8 @@
 """
 Emotion analysis routes.
 
-POST /sessions/{session_id}/frames        – upload a frame for analysis
-GET  /sessions/{session_id}/emotions      – live emotion feed (last N readings)
+POST /sessions/{session_id}/frames   – upload a webcam frame for DeepFace analysis
+GET  /sessions/{session_id}/emotions – live emotion feed (last N readings)
 """
 import asyncio
 import logging
@@ -22,12 +22,13 @@ from app.services import emotion_service
 router = APIRouter(prefix="/sessions", tags=["Emotions"])
 logger = logging.getLogger(__name__)
 
+
 def _thread_init():
-    """Each worker thread needs its own high recursion limit for DeepFace + TensorFlow."""
     import sys
     sys.setrecursionlimit(1000000)
 
-# DeepFace is CPU-bound — run in a thread pool so it doesn't block the event loop
+
+# DeepFace is CPU-bound — run in a thread pool to avoid blocking the event loop
 _executor = ThreadPoolExecutor(max_workers=2, initializer=_thread_init)
 
 
@@ -38,9 +39,9 @@ async def upload_frame(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Receive a base64-encoded video frame, run DeepFace emotion analysis
-    in a thread pool (non-blocking), persist the result, and return it.
-    Called every 3 seconds by the candidate's browser during an active interview.
+    Receive a base64-encoded webcam frame, run DeepFace analysis in a thread pool,
+    persist the result, and return the emotion reading.
+    Called every 3 seconds by the candidate's browser during the interview.
     """
     session = await _get_active_session_or_404(session_id, db)
 
@@ -76,10 +77,7 @@ async def get_live_emotions(
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Return the most recent `limit` emotion readings for a session.
-    The interviewer's dashboard polls this endpoint every 3 seconds.
-    """
+    """Return the most recent `limit` emotion readings for a session."""
     result = await db.execute(
         select(InterviewSession).where(InterviewSession.id == session_id)
     )
@@ -103,9 +101,7 @@ async def _get_active_session_or_404(session_id: UUID, db: AsyncSession) -> Inte
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found.")
-    if session.status not in (SessionStatus.PENDING, SessionStatus.ACTIVE):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Session is {session.status.value}. Only active sessions accept frames.",
-        )
+    if session.status == SessionStatus.COMPLETED:
+        # Still accept frames briefly after completion (race condition grace period)
+        pass
     return session

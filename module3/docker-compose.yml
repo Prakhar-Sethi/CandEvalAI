@@ -18,27 +18,21 @@ services:
       timeout: 5s
       retries: 5
 
-  coturn:
-    image: coturn/coturn:latest
-    container_name: hcl_m3_coturn
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hcl_m3_ollama
     ports:
-      - "3478:3478/tcp"
+      - "11434:11434"
     volumes:
-      - ./coturn.conf:/etc/coturn/turnserver.conf
-    command: -c /etc/coturn/turnserver.conf
-
-  livekit:
-    image: livekit/livekit-server:latest
-    container_name: hcl_m3_livekit
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - "exec /livekit-server --dev --bind 0.0.0.0 --node-ip=$$(hostname -i | awk '{print $$1}')"
-    ports:
-      - "7880:7880"
-      - "7881:7881/tcp"
-      - "7882:7882/udp"
-    depends_on:
-      - coturn
+      - ollama_data:/root/.ollama
+    # Pull the model on first startup (cached in the volume after that)
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull llama3.2 && wait"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
 
   backend:
     build:
@@ -49,16 +43,14 @@ services:
       - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:password@db:5432/hcl_module3
-      LIVEKIT_API_URL: http://livekit:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: secret
-      LIVEKIT_PUBLIC_WS_URL: ws://localhost:7880
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-      livekit:
+      ollama:
         condition: service_started
     volumes:
       - ./backend:/app
@@ -76,3 +68,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:

@@ -6,20 +6,17 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/hcl_module3"
 
-    # LiveKit
-    livekit_api_url: str = "http://localhost:7880"
-    livekit_api_key: str = "devkey"
-    livekit_api_secret: str = "secret"
-    livekit_public_ws_url: str = "ws://localhost:7880"
+    # Ollama (local LLM — no API key needed)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
 
     # App
-    app_name: str = "HCL Module 3 - Technical Interview"
+    app_name: str = "HCL Module 3 - AI Technical Interview"
     debug: bool = False
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
-    # Frame analysis
-    frame_analysis_interval_seconds: int = 3
-    max_frame_size_bytes: int = 5 * 1024 * 1024  # 5 MB
+    # Interview settings
+    max_interview_questions: int = 6
 
     class Config:
         env_file = ".env"

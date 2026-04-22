@@ -14,38 +14,35 @@ class SessionStatus(str, enum.Enum):
     PENDING = "pending"
     ACTIVE = "active"
     COMPLETED = "completed"
-    CANCELLED = "cancelled"
 
 
 class InterviewLabel(str, enum.Enum):
     CONFIDENT = "confident"
     NEUTRAL = "neutral"
     STRESSED = "stressed"
-    DISTRACTED = "distracted"
 
 
 class InterviewSession(Base):
     __tablename__ = "interview_sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    candidate_id = Column(String(255), nullable=False, index=True)
-    interviewer_id = Column(String(255), nullable=False, index=True)
+    candidate_name = Column(String(255), nullable=False)
     job_role = Column(String(255), nullable=True)
 
-    # LiveKit room details
-    livekit_room_name = Column(String(255), nullable=True, unique=True)
-    livekit_room_url = Column(Text, nullable=True)
+    # Conversation history: list of {role: "assistant"|"user", content: str}
+    messages = Column(JSON, default=list, nullable=False)
+    question_count = Column(Integer, default=0, nullable=False)
 
     status = Column(SAEnum(SessionStatus), default=SessionStatus.PENDING, nullable=False)
 
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+    # AI-generated post-interview assessment (populated on completion)
+    ai_assessment = Column(Text, nullable=True)
 
     # Relationships
     emotion_readings = relationship(
@@ -58,20 +55,23 @@ class EmotionReading(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id = Column(
-        UUID(as_uuid=True), ForeignKey("interview_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
-    # Timestamp of the captured frame
-    captured_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    captured_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     frame_index = Column(Integer, nullable=False, default=0)
 
-    # Raw DeepFace output (7 emotions with float scores 0-100)
+    # Raw DeepFace output (7 emotions, values 0-100)
     raw_emotions = Column(JSON, nullable=False)
     dominant_raw_emotion = Column(String(50), nullable=False)
 
-    # Mapped interview label
+    # Mapped interview label + confidence
     interview_label = Column(SAEnum(InterviewLabel), nullable=False)
-    confidence_score = Column(Float, nullable=False)  # 0.0 - 1.0
+    confidence_score = Column(Float, nullable=False)
 
-    # Relationship
     session = relationship("InterviewSession", back_populates="emotion_readings")

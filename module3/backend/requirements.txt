@@ -11,8 +11,8 @@ sqlalchemy==2.0.30
 asyncpg==0.29.0
 alembic==1.13.1
 
-# LiveKit (self-hosted WebRTC, replaces Daily.co — no credit card required)
-livekit-api==0.7.1
+# HTTP client (for Ollama REST API)
+httpx==0.27.0
 
 # Computer vision / emotion analysis
 deepface==0.0.92
@@ -20,6 +20,4 @@ opencv-python-headless==4.9.0.80
 Pillow==10.3.0
 numpy==1.26.4
 tensorflow==2.16.1
-tf-keras==2.16.0            # Required by DeepFace with TF 2.16+ (Keras 3 compatibility layer)
-mediapipe==0.10.21          # Head-pose / gaze detection (looking-down → distracted)
-numpy==1.26.4               # Pinned: mediapipe pulls numpy 2.x which breaks tensorflow
+tf-keras==2.16.0
