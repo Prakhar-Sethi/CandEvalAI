@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
 
+    # OpenAI
+    openai_api_key: str = ""
+
     # App
     app_name: str = "HCL Module 3 - AI Technical Interview"
     debug: bool = False

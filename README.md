@@ -1,222 +1,331 @@
-# HCL AI-Powered Candidate Evaluation Platform
+# CandEvalAI — AI-Powered Candidate Evaluation Platform
 
-Internship Project 4 — A full-stack, AI-powered candidate evaluation system.
+An end-to-end automated hiring pipeline: CV upload → written test → AI interview → coding assessment → final HR report.
 
-## Modules
+**[HR & Candidate User Guide →](GUIDE.md)**
 
-| Module | Name | Status | Port (Backend) | Port (Frontend) |
-|--------|------|--------|----------------|-----------------|
-| Module 2 | Dynamic Written Test | ✅ Complete | 8002 | 3002 |
-| Module 3 | Video Interview + Facial Analysis | ✅ Complete | 8003 | 3003 |
-| Module 4 | Online Coding Test | ✅ Complete | 8004 | 3004 |
-
-## Architecture Overview
-
-```
-                    ┌─────────────────────────────────┐
-                    │         PostgreSQL 16            │
-                    │         (shared DB)              │
-                    └────────┬──────────┬─────────────┘
-                             │          │
-              ┌──────────────┘          └──────────────┐
-              │                                        │
-   ┌──────────▼──────────┐              ┌──────────────▼──────────┐
-   │   Module 2 Backend  │              │   Module 4 Backend      │
-   │   FastAPI :8002     │              │   FastAPI :8004         │
-   │   flan-t5-base      │              │   httpx → Judge0 CE     │
-   │   sentence-xformers │              │                         │
-   └──────────┬──────────┘              └──────────────┬──────────┘
-              │                                        │
-   ┌──────────▼──────────┐              ┌──────────────▼──────────┐
-   │  Module 2 Frontend  │              │  Module 4 Frontend      │
-   │  React+Vite :3002   │              │  React+Vite :3004       │
-   │  Timed MCQ + SA UI  │              │  Monaco Editor UI       │
-   └─────────────────────┘              └──────────────┬──────────┘
-                                                       │
-                                        ┌──────────────▼──────────┐
-                                        │   Judge0 CE :2358       │
-                                        │   (code execution)      │
-                                        │   + Redis + Postgres    │
-                                        └─────────────────────────┘
-```
-
-## Quick Start
-
-### Prerequisites
-- Docker Desktop (with Docker Compose v2)
-- 8GB RAM recommended (Judge0 + ML models)
-
-### 1. Clone / navigate to project
 ```bash
-cd hcl_project_4
-```
-
-### 2. Start everything
-```bash
-docker compose up -d --build
-```
-
-> First run will download ~2GB of ML models (flan-t5-base + sentence-transformers).
-> They are cached in a Docker volume so subsequent starts are fast.
-
-### 3. Wait for services
-```bash
-docker compose ps
-```
-
-All services should show `healthy` or `running`. Judge0 takes ~60 seconds to initialize.
-
-### 4. Access the apps
-
-| App | URL |
-|-----|-----|
-| Module 2 (Written Test) | http://localhost:3002 |
-| Module 4 (Coding Test) | http://localhost:3004 |
-| Module 2 API docs | http://localhost:8002/docs |
-| Module 4 API docs | http://localhost:8004/docs |
-| Judge0 API | http://localhost:2358 |
-
----
-
-## Module 2 — Dynamic Written Test
-
-### What it does
-1. Accepts candidate info + skill list (Python, SQL, Java, etc.)
-2. Uses **flan-t5-base** (local, CPU-only) to generate MCQ and short-answer questions
-3. Serves a **timed test** (30 min default) via React frontend
-4. Auto-grades MCQs; grades short answers via **cosine similarity** (all-MiniLM-L6-v2)
-5. Stores all results in PostgreSQL
-
-### Module 5 Contract
-```
-GET http://localhost:8002/module2/result/{candidate_id}
-```
-Response:
-```json
-{
-  "candidate_id": "...",
-  "score": 72.5,
-  "total": 100,
-  "breakdown": [
-    {"skill": "Python", "questions_attempted": 3, "questions_correct": 2, "points": 25, "max_points": 30}
-  ]
-}
+git clone https://github.com/Anishg198/candidate-evaluator.git
+cd candidate-evaluator
 ```
 
 ---
 
-## Module 4 — Online Coding Test
+## Architecture
 
-### What it does
-1. Presents programming problems in a **Monaco editor** (LeetCode-style UI)
-2. Submits code to **self-hosted Judge0 CE** for sandboxed execution
-3. Runs against visible + hidden test cases; shows pass/fail per case
-4. Computes code quality heuristics (comment ratio, line length, naming conventions)
-5. Logs all submissions, time taken, and attempt counts
-
-### Supported Languages
-| Language | Judge0 ID |
-|----------|-----------|
-| Python 3 | 71 |
-| JavaScript | 63 |
-| Java | 62 |
-| C++ | 54 |
-
-### Module 5 Contract
 ```
-GET http://localhost:8004/module4/result/{candidate_id}
-```
-Response:
-```json
-{
-  "candidate_id": "...",
-  "problems_attempted": 2,
-  "problems_solved": 1,
-  "total_score": 66.7,
-  "submissions": [...]
-}
+platform/frontend   React + Vite UI               http://localhost:5175
+module1/backend     CV parsing API (FastAPI)       http://localhost:8000
+module2/backend     Written test API (FastAPI)     http://localhost:8002
+module3/backend     Interview API (FastAPI)        http://localhost:8003
+module4/backend     Coding test API (FastAPI)      http://localhost:8004
+module5/backend     Final report API (FastAPI)     http://localhost:8005
+PostgreSQL          Shared database                localhost:5432
 ```
 
 ---
 
-## Development (without Docker)
+## Prerequisites
 
-### Module 2 Backend
+Install these before anything else:
+
+- **Python 3.11** — [python.org/downloads](https://www.python.org/downloads/) — **use 3.11 specifically** (Module 2 dependencies fail on 3.13; 3.11 has prebuilt wheels for all packages)
+  - Mac: `brew install python@3.11`
+  - Windows: download the 3.11.x installer from python.org
+- **Node.js 18+** — [nodejs.org](https://nodejs.org/)
+- **PostgreSQL 14+** — see platform-specific instructions below
+- **Git** — [git-scm.com](https://git-scm.com/) *(Windows: includes Git Bash — use Git Bash for all commands)*
+
+For coding test language support (optional):
+
+| Language | Requirement |
+|----------|-------------|
+| Python 3 | included with Python |
+| JavaScript | Node.js (already required) |
+| Java | JDK — `java` + `javac` in PATH |
+| C++ | `g++` in PATH |
+
+---
+
+## Step 1 — Install & Start PostgreSQL
+
+> **This step can take 5–10 minutes** if PostgreSQL is not already installed — the download is ~100 MB. Once installed, future runs are instant.
+
+### Mac
+
+```bash
+# Homebrew (recommended)
+brew install postgresql@16
+brew services start postgresql@16
+```
+
+Or download the app: [postgresapp.com](https://postgresapp.com)
+
+### Windows
+
+**Option 1 — Command line (winget, built into Windows 10/11):**
+```
+winget install PostgreSQL.PostgreSQL.16
+```
+
+**Option 2 — Chocolatey:**
+```
+choco install postgresql16
+```
+
+**Option 3 — Installer:** [postgresql.org/download/windows](https://www.postgresql.org/download/windows/)
+
+During install, set a password for the `postgres` user. After install, PostgreSQL starts automatically as a Windows service.
+
+---
+
+## Step 2 — Database Setup
+
+### Mac
+
+```bash
+bash setup_db.sh
+```
+
+### Windows (Git Bash)
+
+Open **Git Bash** (not Command Prompt or PowerShell), then:
+
+```bash
+bash setup_db.sh
+```
+
+The script creates the `hcl_user` and `hcl_db` database automatically. Safe to re-run on existing databases.
+
+---
+
+## Step 3 — Run the Backends
+
+Open a **separate terminal** for each module. Run each block from the **repo root**.
+
+> **Windows:** use Git Bash for all commands below. Replace `source .venv/bin/activate` with `source .venv/Scripts/activate`.
+
+---
+
+### Module 1 — CV Parsing
+
+**Mac**
+```bash
+cd module1/backend
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Windows (Git Bash)**
+```bash
+cd module1/backend
+python -m venv .venv && source .venv/Scripts/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
+
+### Module 2 — Written Test
+
+**Mac**
 ```bash
 cd module2/backend
-python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # edit DATABASE_URL to point to local postgres
-uvicorn main:app --reload --port 8002
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+MODEL_CACHE_DIR=/tmp/model_cache \
+uvicorn main:app --host 0.0.0.0 --port 8002 --reload --timeout-keep-alive 300
 ```
 
-### Module 2 Frontend
+**Windows (Git Bash)**
 ```bash
-cd module2/frontend
-npm install
-VITE_API_URL=http://localhost:8002 npm run dev
+cd module2/backend
+python -m venv .venv && source .venv/Scripts/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+MODEL_CACHE_DIR=$TEMP/model_cache \
+uvicorn main:app --host 0.0.0.0 --port 8002 --reload --timeout-keep-alive 300
 ```
 
-### Module 4 Backend
+**First startup only:** downloads `all-MiniLM-L6-v2` (~90 MB). Subsequent starts are instant.
+
+---
+
+### Module 3 — AI Interview
+
+**Mac**
+```bash
+cd module3/backend
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+```
+
+**Windows (Git Bash)**
+```bash
+cd module3/backend
+python -m venv .venv && source .venv/Scripts/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+```
+
+---
+
+### Module 4 — Coding Test
+
+**Mac**
 ```bash
 cd module4/backend
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-uvicorn main:app --reload --port 8004
-# Seed sample problems:
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+uvicorn main:app --host 0.0.0.0 --port 8004 --reload
+```
+
+**Windows (Git Bash)**
+```bash
+cd module4/backend
+python -m venv .venv && source .venv/Scripts/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+uvicorn main:app --host 0.0.0.0 --port 8004 --reload
+```
+
+Seed the coding problem bank (first time only):
+
+**Mac**
+```bash
+python3.11 seed.py
+```
+
+**Windows (Git Bash)**
+```bash
 python seed.py
 ```
 
-### Module 4 Frontend
+---
+
+### Module 5 — Final Report
+
+**Mac**
 ```bash
-cd module4/frontend
+cd module5/backend
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+MODULE2_URL=http://localhost:8002 \
+MODULE3_URL=http://localhost:8003 \
+MODULE4_URL=http://localhost:8004 \
+uvicorn main:app --host 0.0.0.0 --port 8005 --reload
+```
+
+**Windows (Git Bash)**
+```bash
+cd module5/backend
+python -m venv .venv && source .venv/Scripts/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql+asyncpg://hcl_user:hcl_pass@localhost:5432/hcl_db \
+MODULE2_URL=http://localhost:8002 \
+MODULE3_URL=http://localhost:8003 \
+MODULE4_URL=http://localhost:8004 \
+uvicorn main:app --host 0.0.0.0 --port 8005 --reload
+```
+
+---
+
+## Step 4 — Run the Frontend
+
+Same on both platforms:
+
+```bash
+cd platform/frontend
 npm install
-VITE_API_URL=http://localhost:8004 npm run dev
+npm run dev
 ```
 
-### Judge0 CE (standalone)
-See [module4/judge0/README.md](module4/judge0/README.md)
+Open `http://localhost:5175`
 
 ---
 
-## Environment Variables
+## HR Portal
 
-### Module 2 Backend
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | — | asyncpg connection string |
-| `MODEL_CACHE_DIR` | `/app/model_cache` | Where HuggingFace models are cached |
+URL: `http://localhost:5175/hr`
+Password: `HCL@2024`
 
-### Module 4 Backend
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | — | asyncpg connection string |
-| `JUDGE0_URL` | `http://judge0:2358` | Judge0 CE base URL |
+**What you can do:**
+- Create and manage job postings (skills, difficulty, question count)
+- View all applications and each candidate's pipeline progress
+- Read AI-generated evaluation reports with scores per module
+- See time taken for each test (written, interview, coding)
+- Set HR decisions — Approve or Reject candidates
 
 ---
 
-## Stopping & Cleanup
-```bash
-# Stop all services (keep data)
-docker compose down
+## Candidate Flow
 
-# Stop and remove all data (full reset)
-docker compose down -v
+1. **Apply** — find an open job on the home page, submit name, email, and CV (PDF)
+2. **Pre-test instructions** — camera check + environment guidelines before each test
+3. **Written Test** — MCQ + short-answer questions tailored to CV skills, 30 min timer, auto-submits on expire
+4. **AI Interview** — 5 text-based questions (technical + behavioural), AI-scored, 30 min timer, auto-submits on expire
+5. **Coding Test** — algorithmic problems with live code execution, 45 min timer, auto-submits on expire; code auto-saved per problem so candidates can switch problems and return; custom input panel for testing against own inputs
+6. **Done** — final report compiled and available to HR
+
+Candidates receive a **Candidate ID** on applying. Use it on the home page to resume the pipeline after a break.
+
+---
+
+## Default Ports
+
+| Service | Port |
+|---------|------|
+| Platform Frontend | 5175 |
+| Module 1 — CV Parsing | 8000 |
+| Module 2 — Written Test | 8002 |
+| Module 3 — Interview | 8003 |
+| Module 4 — Coding | 8004 |
+| Module 5 — Report | 8005 |
+| PostgreSQL | 5432 |
+
+To override backend URLs in the frontend, create `platform/frontend/.env.local`:
+
+```env
+VITE_MODULE1_URL=http://localhost:8000
+VITE_MODULE2_URL=http://localhost:8002
+VITE_MODULE3_URL=http://localhost:8003
+VITE_MODULE4_URL=http://localhost:8004
+VITE_MODULE5_URL=http://localhost:8005
 ```
 
 ---
 
-## Tech Stack Summary
+## Tech Stack
 
-| Layer | Module 2 | Module 4 |
-|-------|----------|----------|
-| Backend | FastAPI | FastAPI |
-| ORM | SQLAlchemy 2.0 async | SQLAlchemy 2.0 async |
-| DB Driver | asyncpg | asyncpg |
-| Database | PostgreSQL 16 | PostgreSQL 16 |
-| AI/ML | flan-t5-base, all-MiniLM-L6-v2 | — |
-| Code Execution | — | Judge0 CE (self-hosted) |
-| Frontend | React 18 + Vite + Tailwind | React 18 + Vite + Tailwind |
-| UI Theme | Dark glassmorphism | Dark glassmorphism |
-| Font | Plus Jakarta Sans | Plus Jakarta Sans + JetBrains Mono |
+**Frontend:** React 18, Vite, Tailwind CSS, React Router, Monaco Editor
+
+**Backends:** FastAPI, SQLAlchemy (async), PostgreSQL, Uvicorn
+
+**AI / ML:** Curated question bank (written test generation), keyword-based scoring (interview grading), face-api (behavioural proctoring)
+
+**Code Execution:** Local subprocess (Python, Node.js, Java, g++) — no Docker
+
+---
+
+## Troubleshooting
+
+**`role "postgres" does not exist` (Mac Homebrew)** — Homebrew uses your macOS username as the superuser, not `postgres`. The `setup_db.sh` script handles this automatically.
+
+**`python: command not found` (Mac)** — Use `python3` on Mac. The README commands already use `python3` for Mac.
+
+**Coding test fails with "Language not supported"** — Make sure `python3`, `node`, `javac`, `g++` are installed and in PATH.
+
+**Camera not working** — browser requires `localhost`. Always access via `http://localhost:5175`, not a LAN IP.
+
+**Written test shows no questions** — HR must create a job posting first.
+
+**Port already in use:**
+- Mac: `lsof -i :PORT` then `kill -9 PID`
+- Windows: `netstat -ano | findstr :PORT` then `taskkill /PID <pid> /F`
