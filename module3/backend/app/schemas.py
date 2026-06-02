@@ -1,7 +1,7 @@
 from __future__ import annotations
 from uuid import UUID
 from datetime import datetime
-from typing import Optional, Any, List
+from typing import Optional, Any
 from pydantic import BaseModel, Field
 
 from app.models import SessionStatus, InterviewLabel
@@ -10,56 +10,62 @@ from app.models import SessionStatus, InterviewLabel
 # ── Session schemas ──────────────────────────────────────────────────────────
 
 class SessionCreate(BaseModel):
-    candidate_name: str = Field(..., min_length=1, max_length=255)
+    candidate_id: str = Field(..., min_length=1, max_length=255)
+    interviewer_id: str = Field(..., min_length=1, max_length=255)
     job_role: Optional[str] = Field(None, max_length=255)
 
 
-class MessageRequest(BaseModel):
-    """Candidate sends a response to the AI interviewer."""
-    content: str = Field(..., min_length=1, max_length=4000)
-
-
-class MessageResponse(BaseModel):
-    """AI interviewer's reply."""
-    ai_message: str
-    question_count: int
-    is_complete: bool
-    session_status: SessionStatus
+class SessionUpdate(BaseModel):
+    status: Optional[SessionStatus] = None
 
 
 class SessionResponse(BaseModel):
     id: UUID
-    candidate_name: str
+    candidate_id: str
+    interviewer_id: str
     job_role: Optional[str]
+    livekit_room_name: Optional[str]
+    livekit_room_url: Optional[str]
     status: SessionStatus
-    messages: List[dict]
-    question_count: int
     started_at: Optional[datetime]
     ended_at: Optional[datetime]
     created_at: datetime
-    ai_assessment: Optional[str]
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class SessionStartResponse(BaseModel):
-    """Returned when a session is created — includes AI's opening greeting."""
-    id: UUID
-    candidate_name: str
-    job_role: Optional[str]
-    status: SessionStatus
-    greeting: str  # AI's opening message
-    created_at: datetime
+# ── Token / room schemas ─────────────────────────────────────────────────────
 
-    model_config = {"from_attributes": True}
+class MeetingTokenRequest(BaseModel):
+    session_id: UUID
+    participant_role: str = Field(..., pattern="^(interviewer|candidate)$")
+    participant_name: str = Field(..., min_length=1, max_length=100)
+
+
+class MeetingTokenResponse(BaseModel):
+    token: str
+    room_url: str
+    expires_at: datetime
 
 
 # ── Emotion schemas ───────────────────────────────────────────────────────────
 
 class FrameUpload(BaseModel):
+    """Base64-encoded JPEG frame sent from the frontend every 3 seconds."""
     frame_b64: str = Field(..., description="Base64-encoded JPEG image data")
     frame_index: int = Field(..., ge=0)
     captured_at: Optional[datetime] = None
+
+
+class RawEmotions(BaseModel):
+    angry: float
+    disgust: float
+    fear: float
+    happy: float
+    sad: float
+    surprise: float
+    neutral: float
 
 
 class EmotionReadingResponse(BaseModel):
@@ -75,9 +81,24 @@ class EmotionReadingResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Report schema ─────────────────────────────────────────────────────────────
+# ── Report schema (Module 5 contract) ────────────────────────────────────────
+
+class EmotionTotals(BaseModel):
+    confident: int
+    neutral: int
+    stressed: int
+    distracted: int
+
+
+class EmotionPercentages(BaseModel):
+    confident: float
+    neutral: float
+    stressed: float
+    distracted: float
+
 
 class EmotionTimeline(BaseModel):
+    """Ordered list of (frame_index, label, confidence, timestamp) for trend charts."""
     frame_index: int
     label: InterviewLabel
     confidence: float
@@ -85,17 +106,20 @@ class EmotionTimeline(BaseModel):
 
 
 class SessionReport(BaseModel):
+    """
+    JSON contract exposed to Module 5.
+    Module 5 should call GET /sessions/{session_id}/report to obtain this object.
+    """
     session_id: UUID
-    candidate_name: str
+    candidate_id: str
+    interviewer_id: str
     job_role: Optional[str]
     status: SessionStatus
     started_at: Optional[datetime]
     ended_at: Optional[datetime]
     total_frames_analyzed: int
-    emotion_breakdown: dict[str, int]
-    emotion_percentages: dict[str, float]
-    dominant_label: str
+    emotion_totals: EmotionTotals
+    emotion_percentages: EmotionPercentages
+    dominant_label: InterviewLabel
     average_confidence: float
-    timeline: List[EmotionTimeline]
-    ai_assessment: Optional[str]
-    transcript: List[dict]
+    timeline: list[EmotionTimeline]
